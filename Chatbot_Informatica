@@ -1,0 +1,973 @@
+import nltk
+import json
+import random
+import numpy as np
+import tensorflow as tf
+from nltk.stem import SnowballStemmer
+import pickle
+import os
+import re
+import datetime
+import ipywidgets as widgets
+from IPython.display import display, HTML, Javascript
+import time
+from google.colab import drive
+
+# -----------------------------------------------------------------------------
+# Configuración inicial para Google Colab y NLTK
+# -----------------------------------------------------------------------------
+
+# Montar Google Drive
+try:
+    drive.mount('/content/drive')
+    print("Google Drive montado correctamente.")
+except Exception as e:
+    print(f"Error al montar Google Drive: {e}")
+
+# Definir la ruta base para guardar y cargar archivos en Google Drive
+# Asegúrate de que esta carpeta exista en tu Drive
+FILES_PATH = '/content/drive/MyDrive/Colab Notebooks/ArchivosIA/informatica_chat' # Cambia esto a tu ruta deseada
+
+# Crear la carpeta si no existe
+os.makedirs(FILES_PATH, exist_ok=True)
+print(f"Carpeta de archivos asegurada en: {FILES_PATH}")
+
+# Descargar recursos de NLTK
+# Esto es CRUCIAL para evitar LookupError
+try:
+    nltk.data.path.append(FILES_PATH) # Añadir la ruta de Drive a los Paths de NLTK
+    # Intentar cargar 'punkt' para español. Si falla, intentar descargar.
+    try:
+        nltk.data.find('tokenizers/punkt/spanish.pickle')
+        print("Recurso 'punkt' (español) ya descargado.")
+    except LookupError:
+        print("Descargando recurso 'punkt' (español)...")
+        nltk.download('punkt', download_dir=FILES_PATH)
+        print("Recurso 'punkt' (español) descargado exitosamente.")
+except Exception as e:
+    print(f"Error al descargar o verificar recursos de NLTK: {e}")
+    print("El chatbot podría usar un tokenizador menos preciso o fallar.")
+
+
+# -----------------------------------------------------------------------------
+# Definición de los Intents (Ejemplo para Ingeniería en Informática)
+# -----------------------------------------------------------------------------
+
+ejemplo_intents_informatica = """
+{
+    "intents": [
+        {
+            "tag": "bienvenida",
+            "patterns": ["Hola", "Saludos", "Buenas", "¿Qué tal?", "Hola bot", "Ola", "Hi", "hola", "Estoy aquí", "Qué onda"],
+            "responses": [
+                "¡Hola! Soy el bot de Ingeniería en Informática 🤖💻 Estoy aquí para responder tus preguntas sobre la carrera. ¿Qué te gustaría saber?",
+                "¡Bienvenido/a! Soy tu asistente virtual para la carrera de Ingeniería en Informática. ¿En qué puedo ayudarte hoy?",
+                "¡Hola! ¿Tienes alguna pregunta sobre la Ingeniería en Informática?"
+            ]
+        },
+        {
+            "tag": "nombre_carrera",
+            "patterns": [
+                "¿Cómo se llama la carrera?",
+                "¿Cuál es el nombre completo de la carrera?",
+                "Nombre de la carrera",
+                "Ingeniería en Informática",
+                "Sobre la carrera",
+                "Quiero saber de la carrera"
+            ],
+            "responses": [
+                "La carrera se llama Ingeniería en Informática.",
+                "Es la carrera de Ingeniería en Informática.",
+                "El nombre completo es Ingeniería en Informática."
+            ]
+        },
+        {
+            "tag": "duracion_carrera",
+            "patterns": [
+                "¿Cuánto dura la carrera?",
+                "Duración de la carrera",
+                "Años de estudio",
+                "Tiempo de la carrera",
+                "¿En cuántos años se termina?"
+            ],
+            "responses": [
+                "La duración de la carrera de Ingeniería en Informática es de aproximadamente 5 años (10 semestres).",
+                "Se completa en 10 semestres, lo que equivale a 5 años de estudio.",
+                "Generalmente, la carrera dura 5 años."
+            ]
+        },
+        {
+            "tag": "salida_laboral",
+            "patterns": [
+                "¿En qué puedo trabajar?",
+                "Salida laboral",
+                "Campo laboral",
+                "¿Dónde trabaja un Ingeniero Informático?",
+                "Oportunidades de empleo",
+                "¿Qué trabajos puedo hacer?"
+            ],
+            "responses": [
+                "Un Ingeniero en Informática tiene una amplia salida laboral: desarrollo de software (web, móvil, escritorio), inteligencia artificial, ciencia de datos, ciberseguridad, administración de redes y sistemas, consultoría tecnológica, gestión de proyectos de TI, desarrollo de videojuegos, entre otros.",
+                "Podrás trabajar en empresas de tecnología, startups, bancos, organismos gubernamentales, o emprender tu propio negocio.",
+                "El campo laboral es muy dinámico y en constante crecimiento, ofreciendo roles como desarrollador, analista de datos, experto en ciberseguridad, arquitecto de software, etc."
+            ]
+        },
+        {
+            "tag": "plan_estudios",
+            "patterns": [
+                "¿Cuál es el plan de estudios?",
+                "Materias de la carrera",
+                "Asignaturas de Informática",
+                "¿Qué se estudia en Ingeniería Informática?",
+                "Malla curricular"
+            ],
+            "responses": [
+                "El plan de estudios de Ingeniería en Informática incluye materias como Programación (Python, Java, C++), Estructuras de Datos, Algoritmos, Bases de Datos, Redes de Computadoras, Sistemas Operativos, Ingeniería de Software, Inteligencia Artificial, Ciberseguridad, y Matemáticas aplicadas.",
+                "Se abordan tanto fundamentos teóricos como aplicaciones prácticas en diversas áreas de la informática.",
+                "Estudiarás desde la lógica de programación hasta el desarrollo de sistemas complejos y la gestión de proyectos tecnológicos."
+            ]
+        },
+        {
+            "tag": "requisitos_ingreso",
+            "patterns": [
+                "¿Qué necesito para ingresar?",
+                "Requisitos de admisión",
+                "¿Cómo entro a la carrera?",
+                "Admisión a Informática",
+                "Inscripción"
+            ],
+            "responses": [
+                "Los requisitos de ingreso suelen incluir haber completado la educación secundaria, presentar la documentación solicitada (DNI, certificado de estudios), y en algunos casos, aprobar un examen de admisión o curso de nivelación.",
+                "Te recomiendo visitar el sitio web oficial de la universidad o contactar a la oficina de admisiones para obtener la información más precisa y actualizada.",
+                "Generalmente se pide el título de bachiller, DNI y en ocasiones un examen de ingreso o un curso propedéutico."
+            ]
+        },
+        {
+            "tag": "habilidades_necesarias",
+            "patterns": [
+                "¿Qué habilidades necesito?",
+                "Habilidades para Informática",
+                "¿Soy bueno para esta carrera?",
+                "Perfil del estudiante",
+                "¿Qué aptitudes se requieren?"
+            ],
+            "responses": [
+                "Para Ingeniería en Informática son útiles: pensamiento lógico, capacidad de resolución de problemas, creatividad, curiosidad por la tecnología, habilidad para el trabajo en equipo, y disciplina para el autoaprendizaje.",
+                "No te preocupes si no tienes todo al principio; muchas de estas habilidades se desarrollan durante la carrera.",
+                "La clave es la curiosidad y las ganas de aprender y crear con tecnología."
+            ]
+        },
+        {
+            "tag": "costo_matricula",
+            "patterns": [
+                "¿Cuánto cuesta la matrícula?",
+                "Costo de la carrera",
+                "Precio de la inscripción",
+                "Cuotas",
+                "Valor de la matrícula"
+            ],
+            "responses": [
+                "El costo de la matrícula y las cuotas varían según la universidad (pública o privada) y el país. Es mejor consultar directamente en la secretaría académica de la institución de tu interés.",
+                "Algunas universidades ofrecen becas o ayudas económicas. Te sugiero investigar estas opciones.",
+                "La información de costos es muy específica de cada universidad. Te recomiendo contactarlos directamente."
+            ]
+        },
+        {
+            "tag": "diferencia_sistemas",
+            "patterns": [
+                "¿Cuál es la diferencia con Ingeniería en Sistemas?",
+                "Informática vs. Sistemas",
+                "Diferencia entre Informática y Computación",
+                "¿Es lo mismo Ingeniería en Informática que Sistemas?"
+            ],
+            "responses": [
+                "Aunque se solapan, Ingeniería en Informática se enfoca más en el software, la programación y la gestión de datos, mientras que Ingeniería en Sistemas a menudo abarca una visión más amplia de la integración de sistemas (hardware, software, personas, procesos).",
+                "Informática suele profundizar en el desarrollo de aplicaciones y algoritmos, mientras Sistemas puede inclinarse más hacia la arquitectura empresarial y la gestión de proyectos de TI complejos.",
+                "En general, el informático construye el software, el de sistemas lo integra en un ecosistema más amplio."
+            ]
+        },
+        {
+            "tag": "practicas_profesionales",
+            "patterns": [
+                "¿Hay prácticas profesionales?",
+                "Pasantías",
+                "Prácticas en empresas",
+                "Experiencia laboral durante la carrera"
+            ],
+            "responses": [
+                "Sí, muchas universidades requieren prácticas profesionales o pasantías como parte del plan de estudios. Esto te permite aplicar tus conocimientos en un entorno real y ganar experiencia.",
+                "Las prácticas son una excelente oportunidad para conectar con la industria y potenciar tu empleabilidad.",
+                "Normalmente, se realizan prácticas en empresas para que los estudiantes adquieran experiencia real."
+            ]
+        },
+        {
+            "tag": "investigacion",
+            "patterns": [
+                "¿Se hace investigación en la carrera?",
+                "Proyectos de investigación",
+                "Oportunidades de investigación",
+                "Investigación en Informática"
+            ],
+            "responses": [
+                "Sí, hay oportunidades para participar en proyectos de investigación con profesores en áreas como IA, procesamiento de lenguaje natural, visión por computadora, robótica, etc.",
+                "Muchos estudiantes se involucran en proyectos de investigación como parte de sus trabajos finales o como asistentes de investigación.",
+                "La investigación es un componente importante en la carrera, especialmente si te interesa la academia o la innovación."
+            ]
+        },
+        {
+            "tag": "plataformas_virtuales",
+            "patterns": [
+                "¿Usan plataformas en línea?",
+                "¿Qué plataforma se usa?",
+                "Clases en línea",
+                "Aula virtual"
+            ],
+            "responses": [
+                "Sí, se usa una plataforma virtual para compartir materiales, tareas, clases grabadas y más. Algunas universidades usan Moodle, Classroom o plataformas propias.",
+                "Es una herramienta muy útil para seguir el ritmo de las materias y mantenerte organizado."
+            ]
+        },
+        {
+            "tag": "metodologia_estudio",
+            "patterns": [
+                "¿Cómo se enseña la carrera?",
+                "Metodología de enseñanza",
+                "¿Es más práctica o teórica?",
+                "¿Cómo son las clases?"
+            ],
+            "responses": [
+                "La metodología es mixta: teoría + práctica. Se desarrollan proyectos, tareas, actividades colaborativas y resolución de problemas reales.",
+                "El aprendizaje se basa en competencias, buscando que apliques lo que sabes en situaciones reales."
+            ]
+        },
+        {
+            "tag": "consultar_coordinador",
+            "patterns": [
+                "¿Puedo hablar con el coordinador?",
+                "Contacto con el coordinador",
+                "¿Con quién resuelvo mis dudas?",
+                "¿A quién le pregunto sobre la carrera?"
+            ],
+            "responses": [
+                "Claro, el coordinador académico es la persona ideal para responder dudas específicas sobre la carrera. Puedes contactarlo por correo o en su horario de oficina.",
+                "También puedes asistir a sesiones informativas o agendar una cita para una charla personalizada."
+            ]
+        },
+        {
+            "tag": "agradecimiento",
+            "patterns": ["Gracias", "Muchas gracias", "Te lo agradezco", "Muy amable", "Excelente ayuda"],
+            "responses": ["De nada, ¡estoy para ayudarte!", "Es un placer poder asistirte.", "No hay de qué, si necesitas algo más."]
+        },
+        {
+            "tag": "despedida",
+            "patterns": ["Adiós", "Hasta luego", "Nos vemos", "Chao", "Bye", "Hasta pronto", "Me despido"],
+            "responses": ["¡Hasta luego! Fue un placer ayudarte.", "Adiós, ¡que tengas un buen día!", "¡Nos vemos pronto! Mucho éxito en tus estudios."]
+        },
+        {
+            "tag": "no_entendido",
+            "patterns": [],
+            "responses": ["No entiendo tu pregunta. ¿Puedes reformularla?", "Disculpa, no comprendo bien. Intenta decirlo de otra manera.", "¿Podrías ser más específico con tu pregunta sobre Ingeniería en Informática?"]
+        }
+    ]
+}
+"""
+
+# Crear archivo de intents
+def crear_archivo_intents():
+    """Crear archivo de intents.json en Drive"""
+    intents_path = os.path.join(FILES_PATH, "intents.json")
+    with open(intents_path, 'w', encoding='utf-8') as f:
+        f.write(ejemplo_intents_informatica)
+    print(f"Archivo intents.json creado en {intents_path}")
+    return intents_path
+
+# Verificar si existe el archivo de intents, si no, crearlo
+intents_path = os.path.join(FILES_PATH, "intents.json")
+
+# --- LÍNEA AÑADIDA PARA FORZAR LA RECREACIÓN DEL ARCHIVO intents.json ---
+# Esto ayuda a asegurar que el archivo JSON esté siempre bien formado con los nuevos intents.
+# SI ESTÁS SEGURO DE QUE TU intents.json EN DRIVE ES EL CORRECTO Y NO QUIERES QUE SE SOBRESCRIBA,
+# PUEDES COMENTAR LAS SIGUIENTES 3 LÍNEAS.
+if os.path.exists(intents_path):
+    os.remove(intents_path)
+    print(f"Antiguo intents.json eliminado de {intents_path}.")
+# --- FIN DE LA LÍNEA AÑADIDA ---
+
+if not os.path.exists(intents_path):
+    print("Creando archivo de intents...")
+    intents_path = crear_archivo_intents()
+
+# Definición de la clase ChatbotEmpresarial
+class ChatbotEmpresarial:
+    def __init__(self, archivo_intents=None, carpeta_modelo=None, umbral_confianza=0.65):
+        """Inicializa el chatbot empresarial
+
+        Argumentos:
+            archivo_intents: ruta al archivo JSON con intenciones y respuestas
+            carpeta_modelo: directorio donde guardar/cargar el modelo
+            umbral_confianza: confianza mínima para aceptar una predicción
+        """
+
+        if archivo_intents is None:
+            self.archivo_intents = os.path.join(FILES_PATH, "intents.json")
+        else:
+            self.archivo_intents = archivo_intents
+
+        if carpeta_modelo is None:
+            self.carpeta_modelo = FILES_PATH # Usamos la misma carpeta para modelos
+        else:
+            self.carpeta_modelo = carpeta_modelo
+
+        self.umbral_confianza = umbral_confianza
+
+        # Para almacenar datos procesados
+        self.palabras = []
+        self.clases = []
+        self.documentos = []
+        self.ignorar_caracteres = ['?', '¿', '!', '¡', '.', ',']
+        self.stemmer = SnowballStemmer('spanish')
+        self.intents = {}
+
+        # Variables para el modelo
+        self.modelo = None
+        self.preparado = False
+
+        # Información contextual
+        self.contexto = {}
+        self.max_duracion_contexto = 5  # minutos
+
+        # Crear directorio para el modelo si no existe
+        os.makedirs(self.carpeta_modelo, exist_ok=True)
+
+        # Cargar intents inmediatamente
+        self.cargar_intents()
+
+        # Intentar cargar un modelo existente
+        try:
+            modelo_path = os.path.join(self.carpeta_modelo, "modelo.h5")
+            if os.path.exists(modelo_path):
+                self.cargar_modelo()
+            else:
+                print("No se encontró un modelo pre-entrenado. Será necesario entrenar uno.")
+        except Exception as e:
+            print(f"Error al intentar cargar el modelo: {e}")
+            print("Se entrenará un nuevo modelo.")
+            self.preparado = False
+
+    def cargar_intents(self):
+        """Carga los intents desde el archivo JSON"""
+        try:
+            with open(self.archivo_intents, 'r', encoding='utf-8') as archivo:
+                self.intents = json.load(archivo)
+            print(f"Intents cargados: {len(self.intents['intents'])} intenciones")
+            return True
+        except Exception as e:
+            print(f"Error al cargar intents desde {self.archivo_intents}: {e}")
+            self.intents = {'intents': []} # Asegura que intents sea un diccionario con 'intents' vacío
+            return False
+
+    def preprocesar_datos(self):
+        """Preprocesa los datos para entrenamiento"""
+        # Verificar si ya tenemos intents cargados, si no, intentarlo
+        if not self.intents or not self.intents['intents']:
+            if not self.cargar_intents():
+                print("No se pudieron cargar los intents. No se puede preprocesar.")
+                return False
+
+        # Resetear variables
+        self.palabras = []
+        self.clases = []
+        self.documentos = []
+
+        # Procesar cada intent
+        for intent in self.intents['intents']:
+            # Guardar la clase (tag) si no existe
+            if intent['tag'] not in self.clases:
+                self.clases.append(intent['tag'])
+
+            # Procesar cada patrón de ejemplo
+            for patron in intent['patterns']:
+                # Tokenizar
+                try:
+                    # Intenta tokenizar la frase especificando el idioma
+                    # Aquí la validación se hace con NLTK directamente, no con try-except externo
+                    tokens = nltk.word_tokenize(patron, language='spanish')
+                except LookupError:
+                    # Si el tokenizador en español no está disponible, intenta el predeterminado
+                    print(f"Advertencia: No se pudo cargar el tokenizador en español para '{patron}', usando el predeterminado.")
+                    try:
+                        tokens = nltk.word_tokenize(patron)
+                    except Exception as e:
+                        # Fallback a tokenización simple si hay otro error o NLTK falla totalmente
+                        print(f"Error en tokenización NLTK ({e}). Usando tokenización simple con regex.")
+                        tokens = re.findall(r'\b\w+\b', patron.lower())
+                except Exception as e:
+                    # Fallback a tokenización simple para cualquier otro error
+                    print(f"Error inesperado en tokenización NLTK ({e}). Usando tokenización simple con regex.")
+                    tokens = re.findall(r'\b\w+\b', patron.lower())
+
+
+                # Añadir a lista de palabras
+                self.palabras.extend(tokens) # Usamos 'tokens' directamente
+
+                # Añadir al documento (par de patrón tokenizado y tag)
+                self.documentos.append((tokens, intent['tag'])) # Usamos 'tokens' directamente
+
+        # Convertir a minúsculas y eliminar duplicados y caracteres a ignorar
+        self.palabras = [self.stemmer.stem(palabra.lower()) for palabra in self.palabras
+                         if palabra not in self.ignorar_caracteres and palabra.strip() != '']
+
+        # Eliminar duplicados y ordenar
+        self.palabras = sorted(list(set(self.palabras)))
+        self.clases = sorted(list(set(self.clases)))
+
+        print(f"Vocabulario: {len(self.palabras)} palabras únicas")
+        print(f"Clases: {len(self.clases)} intenciones")
+        print(f"Documentos: {len(self.documentos)} patrones de ejemplo")
+
+        if not self.palabras or not self.clases:
+            print("No se generaron palabras o clases. Revisa tu archivo intents.json.")
+            return False
+        return True
+
+    def crear_datos_entrenamiento(self):
+        """Crea los datos de entrenamiento para la red neuronal"""
+        # Verificar si tenemos datos preprocesados
+        if not self.palabras or not self.clases or not self.documentos:
+            if not self.preprocesar_datos():
+                raise ValueError("No se pudieron preprocesar los datos para el entrenamiento.")
+
+        # Crear listas para entrenamiento
+        datos_entrenamiento = []
+
+        # Crear un array vacío para la salida (lleno de ceros)
+        salida_vacia = [0] * len(self.clases)
+
+        # Crear conjunto de bolsa de palabras para cada documento
+        for doc in self.documentos:
+            # Inicializar bolsa de palabras
+            bolsa = []
+
+            # Lista de palabras tokenizadas del patrón
+            palabras_patron = doc[0]
+
+            # Stemming de cada palabra
+            palabras_patron = [self.stemmer.stem(palabra.lower()) for palabra in palabras_patron]
+
+            # Crear bolsa de palabras: 1 si la palabra está en el patrón, 0 si no
+            for palabra in self.palabras:
+                bolsa.append(1) if palabra in palabras_patron else bolsa.append(0)
+
+            # Copia de la salida (inicialmente todos 0)
+            salida_fila = list(salida_vacia)
+
+            # Poner 1 en la clase correspondiente
+            salida_fila[self.clases.index(doc[1])] = 1
+
+            # Añadir a los datos de entrenamiento
+            datos_entrenamiento.append([bolsa, salida_fila])
+
+        # Mezclar los datos
+        random.shuffle(datos_entrenamiento)
+
+        # Convertir a numpy array
+        # Asegurarse de que las sublistas sean de tamaño uniforme
+        x_train = np.array([item[0] for item in datos_entrenamiento])
+        y_train = np.array([item[1] for item in datos_entrenamiento])
+
+        return x_train, y_train
+
+    def crear_modelo(self, capas_ocultas=[128, 64]):
+        """Crea un modelo de red neuronal
+
+        Argumentos:
+            capas_ocultas: lista con el número de neuronas en cada capa oculta
+        """
+
+        # Verificar si tenemos datos
+        if not self.palabras:
+            self.preprocesar_datos()
+
+        # Obtener dimensiones de entrada/salida
+        input_shape = len(self.palabras)
+        output_shape = len(self.clases)
+
+        if input_shape == 0 or output_shape == 0:
+            raise ValueError("No se pueden crear el modelo: dimensiones de entrada/salida son cero. Revisa tus intents.")
+
+        # Crear modelo
+        modelo = tf.keras.Sequential()
+
+        # Capa de entrada
+        modelo.add(tf.keras.layers.Dense(capas_ocultas[0], input_shape=(input_shape,), activation='relu'))
+        modelo.add(tf.keras.layers.Dropout(0.5))
+
+        # Capas ocultas adicionales
+        for unidades in capas_ocultas[1:]:
+            modelo.add(tf.keras.layers.Dense(unidades, activation='relu'))
+            modelo.add(tf.keras.layers.Dropout(0.5))
+
+        # Capa de salida
+        modelo.add(tf.keras.layers.Dense(output_shape, activation='softmax'))
+
+        # Compilar modelo
+        modelo.compile(
+            loss='categorical_crossentropy',
+            optimizer='adam',
+            metrics=['accuracy']
+        )
+
+        return modelo
+
+    def entrenar_modelo(self, epochs=200, batch_size=5, verbose=1):
+        """Entrena el modelo con los datos procesados
+
+        Argumentos:
+            epochs: número de épocas de entrenamiento
+            batch_size: tamaño del lote
+            verbose: nivel de detalle durante el entrenamiento (0-2)
+        """
+
+        # Preparar datos
+        try:
+            x_train, y_train = self.crear_datos_entrenamiento()
+        except ValueError as e:
+            print(f"Error al crear datos de entrenamiento: {e}. No se puede entrenar el modelo.")
+            return None # Retornar None para indicar que el entrenamiento falló
+
+        if x_train.size == 0 or y_train.size == 0:
+            print("Los datos de entrenamiento están vacíos. No se puede entrenar el modelo.")
+            return None
+
+        # Crear modelo
+        try:
+            self.modelo = self.crear_modelo()
+        except ValueError as e:
+            print(f"Error al crear el modelo: {e}. No se puede entrenar.")
+            return None
+
+        # Entrenar modelo
+        historial = self.modelo.fit(
+            x_train, y_train,
+            epochs=epochs,
+            batch_size=batch_size,
+            verbose=verbose
+        )
+
+        # Guardar modelo
+        self.guardar_modelo()
+
+        return historial
+
+    def guardar_modelo(self):
+        """Guarda el modelo entrenado y datos necesarios"""
+        # Crear directorio si no existe
+        os.makedirs(self.carpeta_modelo, exist_ok=True)
+
+        # Guardar modelo
+        self.modelo.save(os.path.join(self.carpeta_modelo, "modelo.h5"))
+
+        # Guardar palabras
+        with open(os.path.join(self.carpeta_modelo, "palabras.pkl"), 'wb') as archivo:
+            pickle.dump(self.palabras, archivo)
+
+        # Guardar clases
+        with open(os.path.join(self.carpeta_modelo, "clases.pkl"), 'wb') as archivo:
+            pickle.dump(self.clases, archivo)
+
+        print(f"Modelo y datos guardados en {self.carpeta_modelo}")
+        self.preparado = True
+
+    def cargar_modelo(self):
+        """Carga un modelo previamente entrenado"""
+        try:
+            # Cargar modelo
+            modelo_path = os.path.join(self.carpeta_modelo, "modelo.h5")
+            self.modelo = tf.keras.models.load_model(modelo_path)
+
+            # Cargar palabras
+            palabras_path = os.path.join(self.carpeta_modelo, "palabras.pkl")
+            with open(palabras_path, 'rb') as archivo:
+                self.palabras = pickle.load(archivo)
+
+            # Cargar clases
+            clases_path = os.path.join(self.carpeta_modelo, "clases.pkl")
+            with open(clases_path, 'rb') as archivo:
+                self.clases = pickle.load(archivo)
+
+            print("Modelo y datos cargados exitosamente.")
+            self.preparado = True
+            return True
+        except Exception as e:
+            print(f"Error al cargar el modelo o datos: {e}")
+            self.preparado = False
+            return False
+
+    def limpiar_frase(self, frase):
+        """Limpia y tokeniza una frase de entrada
+        Argumentos:
+            frase: texto de entrada para procesar
+        """
+        try:
+            # Intenta tokenizar la frase especificando el idioma español
+            tokens = nltk.word_tokenize(frase, language='spanish')
+        except LookupError:
+            # Si el tokenizador en español no está disponible, intentar el predeterminado
+            # print("Advertencia: No se pudo cargar el tokenizador en español, usando el predeterminado.")
+            try:
+                tokens = nltk.word_tokenize(frase)
+            except Exception as e:
+                # Fallback a tokenización simple si hay otro error o NLTK falla totalmente
+                print(f"Error en tokenización NLTK ({e}). Usando tokenización simple con regex.")
+                tokens = re.findall(r'\b\w+\b', frase.lower())
+        except Exception as e:
+            # Fallback a tokenización simple para cualquier otro error
+            print(f"Error inesperado en tokenización NLTK ({e}). Usando tokenización simple con regex.")
+            tokens = re.findall(r'\b\w+\b', frase.lower())
+
+        # Stemming de cada palabra y eliminación de caracteres a ignorar
+        tokens = [self.stemmer.stem(palabra.lower()) for palabra in tokens
+                  if palabra not in self.ignorar_caracteres and palabra.strip() != '']
+        return tokens
+
+    def crear_bolsa_palabras(self, frase):
+        """Crea una bolsa de palabras a partir de una frase
+
+        Argumentos:
+            frase: texto de entrada para convertir a bolsa de palabras
+        """
+        # Tokenizar y limpiar la frase
+        tokens = self.limpiar_frase(frase)
+
+        # Crear bolsa de palabras
+        bolsa = [0] * len(self.palabras)
+
+        for token in tokens:
+            for i, palabra in enumerate(self.palabras):
+                if palabra == token:
+                    bolsa[i] = 1
+        return np.array([bolsa])
+
+    def predecir_clase(self, frase):
+        """Predice la clase (intent) de una frase
+
+        Argumentos:
+            frase: texto de entrada para clasificar
+        """
+        if not self.preparado or self.modelo is None:
+            print("El modelo no está preparado. Cargue o entrene primero.")
+            return []
+
+        # Crear bolsa de palabras
+        bolsa = self.crear_bolsa_palabras(frase)
+
+        if bolsa.shape[1] != len(self.palabras):
+            print(f"Error: El tamaño de la bolsa de palabras ({bolsa.shape[1]}) no coincide con el vocabulario ({len(self.palabras)}).")
+            return [] # Retorna vacío si hay un problema con las dimensiones
+
+        # Predecir
+        resultado = self.modelo.predict(bolsa, verbose=0)[0] # verbose=0 para no mostrar logs de predicción
+
+        # Filtrar predicciones por umbral de confianza
+        resultados = [[i, r] for i, r in enumerate(resultado) if r > self.umbral_confianza]
+
+        # Ordenar por probabilidad
+        resultados.sort(key=lambda x: x[1], reverse=True)
+
+        # Convertir índices a clases y probabilidades
+        return_list =[]
+        for r in resultados:
+            return_list.append({
+                "intent": self.clases[r[0]],
+                "probability": float(r[1])
+            })
+        return return_list
+
+    def obtener_respuesta(self, intents_predichos, id_usuario="general"):
+        """Obtiene una respuesta basada en la intención predicha
+
+        Argumentos:
+            intents_predichos: lista de intents predichos con probabilidades
+            id_usuario: identificador del usuario para mantener contexto
+        """
+        # Si no hay predicciones válidas
+        if not intents_predichos:
+            # Fallback a un intent predefinido para cuando no se entienda nada
+            for intent in self.intents['intents']:
+                if intent['tag'] == "no_entendido":
+                    return {
+                        "respuesta": random.choice(intent['responses']),
+                        "intent": "no_entendido",
+                        "contexto": None
+                    }
+            return { # Si ni siquiera "no_entendido" está definido
+                "respuesta": "No entiendo tu pregunta. ¿Puedes reformularla?",
+                "intent": None,
+                "contexto": None
+            }
+
+        # Obtener el intent con mayor probabilidad
+        tag = intents_predichos[0]['intent']
+        probabilidad = intents_predichos[0]['probability']
+
+        # Verificar tiempo de contexto
+        self.limpiar_contextos_antiguos()
+
+        # Verificar si estamos en un contexto específico
+        contexto_actual = None
+        if id_usuario in self.contexto:
+            contexto_actual = self.contexto[id_usuario]["contexto"]
+
+        # Buscar la respuesta adecuada
+        for intent in self.intents['intents']:
+            if intent['tag'] == tag:
+                # Verificar si el intent requiere contexto y si coincide con el actual
+                if 'contexto_requerido' in intent and contexto_actual != intent['contexto_requerido']:
+                    # Este intent requiere un contexto específico que no tenemos, buscar una respuesta alternativa o default
+                    continue
+
+                # Seleccionar una respuesta aleatoria
+                respuesta = random.choice(intent['responses'])
+
+                # Actualizar contexto si es necesario
+                if 'contexto_establecido' in intent:
+                    self.contexto[id_usuario] = {
+                        "contexto": intent['contexto_establecido'],
+                        "tiempo": datetime.datetime.now()
+                    }
+                else:
+                    # Limpiar contexto si no se establece uno nuevo (o si el intent no lo requiere)
+                    if id_usuario in self.contexto:
+                        del self.contexto[id_usuario]
+
+                return {
+                    "respuesta": respuesta,
+                    "intent": tag,
+                    "probabilidad": probabilidad,
+                    "contexto": self.contexto.get(id_usuario, {}).get("contexto", None)
+                }
+
+        # Si llegamos aquí, significa que el intent predicho requería un contexto que no se cumplió,
+        # o que la intención predicha no tiene respuestas para el contexto actual,
+        # o que no se encontró el tag. En este caso, usamos el intent "no_entendido" si existe.
+        for intent in self.intents['intents']:
+            if intent['tag'] == "no_entendido":
+                return {
+                    "respuesta": random.choice(intent['responses']),
+                    "intent": "no_entendido",
+                    "contexto": None
+                }
+        return {
+            "respuesta": "No puedo responder a eso en este momento o necesito más información. ¿Podrías ser más específico?",
+            "intent": tag, # Aún reportamos el intent que se intentó
+            "probabilidad": probabilidad,
+            "contexto": contexto_actual
+        }
+
+    def limpiar_contextos_antiguos(self):
+        """Elimina contextos antiguos que hayan expirado"""
+        tiempo_actual = datetime.datetime.now()
+        usuarios_a_eliminar = []
+
+        for id_usuario, datos_contexto in self.contexto.items():
+            tiempo_contexto = datos_contexto["tiempo"]
+            duracion = (tiempo_actual - tiempo_contexto).total_seconds() / 60  # en minutos
+
+            if duracion > self.max_duracion_contexto:
+                usuarios_a_eliminar.append(id_usuario)
+
+        for id_usuario in usuarios_a_eliminar:
+            del self.contexto[id_usuario]
+
+    def get_respuesta(self, mensaje, id_usuario="general"):
+        """Método principal para obtener una respuesta a un mensaje
+
+        Argumentos:
+            mensaje: texto del usuario
+            id_usuario: identificador del usuario
+        """
+        # Asegurarse de que el modelo esté listo
+        if not self.preparado:
+            print("El chatbot no está preparado. Intentando cargar o entrenar el modelo...")
+            try:
+                # Intentar cargar un modelo existente
+                if not self.cargar_modelo():
+                    # Si no hay modelo, entrenar uno nuevo
+                    print("No se encontró un modelo existente o hubo un error al cargarlo. Entrenando nuevo modelo...")
+                    if self.preprocesar_datos(): # Asegurarse de preprocesar antes de entrenar
+                        self.entrenar_modelo(epochs=300, verbose=1) # Aumentado a 300 épocas
+                    else:
+                        return {
+                            "respuesta": "Error: No se pudieron preparar los datos para entrenar el chatbot.",
+                            "error": True
+                        }
+                if not self.preparado: # Si después de intentar cargar/entrenar el modelo sigue sin estar preparado
+                    return {
+                        "respuesta": "Error: El chatbot no está listo para responder. Por favor, revisa la configuración y los logs.",
+                        "error": True
+                    }
+            except Exception as e:
+                return {
+                    "respuesta": f"Error crítico al preparar el chatbot: {str(e)}. Por favor, inténtalo de nuevo.",
+                    "error": True
+                }
+
+        # Predecir la clase (intent)
+        intents = self.predecir_clase(mensaje)
+
+        # Obtener respuesta
+        return self.obtener_respuesta(intents, id_usuario)
+
+# Función para crear una interfaz de usuario en Colab
+def crear_interfaz_chatbot():
+    # Crear instancia del chatbot
+    chatbot = ChatbotEmpresarial()
+
+    # Preparar el chatbot si es necesario
+    if not chatbot.preparado:
+        print("Preparando el chatbot para la primera vez (puede tomar unos minutos)...")
+        try:
+            if not chatbot.preprocesar_datos():
+                print("No se pudieron preprocesar los datos. Revisar intents.json.")
+                return None, None # Indica que no se pudo inicializar
+
+            if not chatbot.cargar_modelo():
+                    print("No se encontró un modelo existente. Entrenando nuevo modelo...")
+                    chatbot.entrenar_modelo(epochs=300, verbose=1) # Aumentado a 300 épocas
+        except Exception as e:
+            print(f"Error crítico al preparar el chatbot: {e}")
+            return None, None # Indica que no se pudo inicializar
+
+    # Crear ID de usuario
+    id_usuario = f"user_{random.randint(1000, 9999)}"
+
+    # Crear widgets para la interfaz
+    header = widgets.HTML(value="<h2 style='text-align:center; color:#0078d7;'>Asistente Virtual de Ingeniería en Informática</h2>")
+
+    # Área de chat
+    chat_output_area = widgets.Output(
+        layout=widgets.Layout(
+            border='1px solid lightgray',
+            height='300px',
+            overflow_y='auto',
+            background='#f5f8fa',
+            padding='10px',
+            border_radius='5px'
+        )
+    )
+
+    # Mensaje inicial del bot
+    with chat_output_area:
+        # Aquí el color de letra para el mensaje inicial del bot
+        display(HTML(
+            "<div style='background-color:#ECECEC; padding:10px; border-radius:10px; margin-bottom:10px; max-width:70%; color: #000;'>" # COLOR NEGRO
+            "¡Hola! Soy el bot de Ingeniería en Informática 🤖💻 Estoy aquí para responder tus preguntas sobre la carrera. ¿Qué te gustaría saber?"
+            "</div>"
+        ))
+        # JavaScript para el scroll
+        display(Javascript('''
+            var chatContainer = document.querySelector("#%s div"); // Selecciona el div de contenido real dentro del Output
+            if (chatContainer) {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        ''' % chat_output_area.comm.target_name))
+
+
+    # Entrada de texto y botón
+    text_input = widgets.Text(
+        placeholder='Escribe tu mensaje aquí...',
+        layout=widgets.Layout(width='80%')
+    )
+
+    send_button = widgets.Button(
+        description='Enviar',
+        button_style='primary',
+        layout=widgets.Layout(width='18%'
+    ))
+
+    # Función para manejar el envío de mensajes
+    def on_send_button_clicked(b):
+        mensaje = text_input.value
+        if not mensaje.strip():
+            return
+
+        # Limpiar entrada
+        text_input.value = ''
+
+        # Mostrar mensaje del usuario
+        with chat_output_area:
+            # Aquí el color de letra para el mensaje del usuario
+            display(HTML(
+                f"<div style='background-color:#DCF8C6; padding:10px; border-radius:10px; margin-bottom:10px; max-width:70%; margin-left:30%; color: #000;'>{mensaje}</div>" # COLOR NEGRO
+            ))
+            # JavaScript para el scroll
+            display(Javascript('''
+                var chatContainer = document.querySelector("#%s div");
+                if (chatContainer) {
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                }
+            ''' % chat_output_area.comm.target_name))
+
+
+        # Obtener respuesta del chatbot
+        resultado = chatbot.get_respuesta(mensaje, id_usuario)
+
+        # Simular tiempo de respuesta para una experiencia más natural
+        # Esto podría ayudar a que la interfaz no se sobrecargue con demasiadas actualizaciones rápidas
+        time.sleep(0.5)
+
+        # Agregar respuesta del chatbot
+        with chat_output_area:
+            # Aquí el color de letra para el mensaje del bot
+            display(HTML(
+                f"<div style='background-color:#ECECEC; padding:10px; border-radius:10px; margin-bottom:10px; max-width:70%; color: #000;'>{resultado['respuesta']}</div>" # COLOR NEGRO
+            ))
+            # JavaScript para el scroll
+            display(Javascript('''
+                var chatContainer = document.querySelector("#%s div");
+                if (chatContainer) {
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                }
+            ''' % chat_output_area.comm.target_name))
+
+
+    # Conectar eventos
+    send_button.on_click(on_send_button_clicked)
+
+    # Conectar tecla Enter
+    def handle_enter(widget):
+        on_send_button_clicked(None)
+
+    text_input.on_submit(handle_enter)
+
+    # Crear layout de entrada
+    input_layout = widgets.HBox([text_input, send_button])
+
+    # Crear layout principal
+    main_layout = widgets.VBox([header, chat_output_area, input_layout])
+
+    # Mostrar interfaz
+    display(main_layout)
+
+    # Enfocar entrada de texto
+    display(Javascript('document.querySelector("input").focus();'))
+
+    return chatbot, id_usuario
+
+# Función principal
+def main():
+    print("Inicializando Chatbot Empresarial...")
+
+    # Crear interfaz del chatbot
+    print("Creando interfaz del chatbot...")
+    chatbot, id_usuario = crear_interfaz_chatbot()
+
+    if chatbot and id_usuario:
+        print(f"Chatbot inicializado con ID de usuario: {id_usuario}")
+        print("Ahora puedes interactuar con el chatbot.")
+    else:
+        print("Fallo al inicializar el chatbot. Revisa los mensajes de error anteriores.")
+
+# Ejecutar el programa
+if __name__ == "__main__":
+    main()
